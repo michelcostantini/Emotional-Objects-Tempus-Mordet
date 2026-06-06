@@ -39,9 +39,11 @@ const uint8_t PIN_BTN_YELLOW = 36;
 const uint8_t PIN_BTN_GREEN = 40;
 
 // MICRO-SWITCHES
-const uint8_t PIN_SWITCH_HOUR = 47;
 const uint8_t PIN_SWITCH_MINUTE = 44;
 const uint8_t PIN_SWITCH_LOCK = 48;
+
+// HALL EFFECT SENSOR
+const uint8_t PIN_HALL_SENSOR_HOUR = 47;
 
 // =========
 //   ENUMS
@@ -136,10 +138,10 @@ const unsigned long MINUTE_HAND_INTERVAL_MS = 1000UL;  // Interval between ticks
 const unsigned long HOUR_HAND_INTERVAL_MS = 60000UL;   // Interval between ticks of the hour hand, here set to 1 minute to increase visibility and oddness
 
 // Hand offsets for expressions
-const uint16_t HOUR_OFFSET_MOUSTACHE = 1;
-const uint16_t MINUTE_OFFSET_MOUSTACHE = 45;
-const uint16_t HOUR_OFFSET_EYEBROWS = 5;
-const uint16_t MINUTE_OFFSET_EYEBROWS = 1;
+const uint16_t HOUR_OFFSET_MOUSTACHE = 3;
+const uint16_t MINUTE_OFFSET_MOUSTACHE = 50;
+const uint16_t HOUR_OFFSET_EYEBROWS = 0;
+const uint16_t MINUTE_OFFSET_EYEBROWS = 5;
 
 // Lunar servo angles (based on emotion)
 const uint8_t LUNAR_ANGLE_NORMAL = 0;   // Duplicated for possible variations
@@ -153,8 +155,8 @@ const uint8_t TEXT_ANGLE_POUT = 0;
 const uint8_t TEXT_ANGLE_SMILE = 180;
 
 // Lock servo angles (based on configuration)
-const uint8_t ROPE_ANGLE_TAUT = 0;
-const uint8_t ROPE_ANGLE_LOOSE = 180;
+const uint8_t ROPE_ANGLE_TAUT = 10;
+const uint8_t ROPE_ANGLE_LOOSE = 170;
 
 // Rope servo angles (based on configuration)
 const uint8_t LOCK_ANGLE_OPEN = 0;
@@ -168,8 +170,8 @@ const float PENDULUM_PERIOD_SAD = 3000.0;
 const float PENDULUM_PERIOD_ANGRY = 500.0;
 
 // Pendulum servo movement settings
-const uint8_t PENDULUM_SWING_AMPLITUDE = 15;
-const uint8_t PENDULUM_CENTER = 100;  // Adjustable for possible servo imprecisions
+const uint8_t PENDULUM_SWING_AMPLITUDE = 20;
+const uint8_t PENDULUM_CENTER = 80;  // Adjustable for possible servo imprecisions
 
 // Hungry emotion timers
 const unsigned long BUILDUP_DURATION = 10000;   // Duration of the first phase
@@ -189,7 +191,7 @@ const uint8_t PROXIMITY_THRESHOLD = 100;
 const uint8_t MAX_DISTANCE = 150;  // Maximum distance that the sonar checks during ping requests
 
 // Game settings
-const uint8_t GAME_WIN_LEVEL = 5;            // Lenght of the sequence needed to trigger happy emotion
+const uint8_t GAME_WIN_LEVEL = 5;            // Length of the sequence needed to trigger happy emotion
 const uint8_t GAME_LOSS_LIMIT = 3;           // Number of losses needed to trigger stubborn angry emotion
 const uint8_t GAME_BLINKS = 8;               // Number of led blinks during game animations
 const unsigned long GAME_SHOW_ON_MS = 800;   // Duration that an LED color remains on during sequence playback
@@ -291,7 +293,7 @@ ConcurrentServo servos[] = {
   { Servo(), PIN_SERVO_HOUR, HAND_STOP, HAND_STOP, 0, 0, true },
   { Servo(), PIN_SERVO_MINUTE, HAND_STOP, HAND_STOP, 0, 0, true },
   { Servo(), PIN_SERVO_PENDULUM, HAND_STOP, HAND_STOP, 0, 20, false },
-  { Servo(), PIN_SERVO_ROPE, ROPE_ANGLE_LOOSE, ROPE_ANGLE_LOOSE, 0, 20, false },
+  { Servo(), PIN_SERVO_ROPE, ROPE_ANGLE_LOOSE, ROPE_ANGLE_LOOSE, 0, 1000, false },
   { Servo(), PIN_SERVO_LOCK, LOCK_ANGLE_CLOSED, LOCK_ANGLE_CLOSED, 0, 5, false }
 };
 
@@ -555,9 +557,10 @@ void handleSadGame(unsigned long currentTime) {
 // ==================================
 
 void handleHandPositioning(unsigned long currentTime) {
-  // Ignore the call if clock is ticking
+  // Ignore the call if clock is ticking or rotating disks
   if (currentEmotion == EMOTION_HUNGRY) return;
   if (currentMode == NORMAL_MODE || currentMode == HAUNTED_MODE) return;
+  if (servos[SRV_LUNAR].currentAngle != servos[SRV_LUNAR].targetAngle || servos[SRV_TEXT].currentAngle != servos[SRV_TEXT].targetAngle) return;
 
   switch (hourHandState) {
     static bool hourHomeFound = false;
@@ -570,7 +573,7 @@ void handleHandPositioning(unsigned long currentTime) {
         if (currentTime - hourClearTimer >= 500) {
           hourIsClearing = false;
         }
-      } else if (digitalRead(PIN_SWITCH_HOUR) == LOW) {
+      } else if (digitalRead(PIN_HALL_SENSOR_HOUR) == LOW) {
         if (!hourHomeFound) {
           // First hit: starts full lap calibration timer
           hourLapStart = currentTime;
@@ -698,11 +701,14 @@ void applyEmotionTransition(unsigned long currentTime) {
     minuteHandOffset = MINUTE_OFFSET_MOUSTACHE;
   }
 
-  // Starts the homing phase to reach target configuration
-  hourHandState = HAND_HOMING;
-  minuteHandState = HAND_HOMING;
-  servos[SRV_HOUR].targetAngle = HAND_SLOW_SPEED;
-  servos[SRV_MINUTE].targetAngle = HAND_SLOW_SPEED;
+  // Starts the ticking or the homing phase to reach target configuration
+  if (currentEmotion == EMOTION_NONE || currentEmotion == EMOTION_HUNGRY) {
+    hourHandState = HAND_IDLE;
+    minuteHandState = HAND_IDLE;
+  } else {
+    hourHandState = HAND_HOMING;
+    minuteHandState = HAND_HOMING;
+  }
 }
 
 
@@ -711,7 +717,7 @@ void applyEmotionTransition(unsigned long currentTime) {
 // =========
 
 void setup() {
-  //Serial.begin(115200);  // To uncomment for debbugging
+  //Serial.begin(115200);  // To uncomment for debugging
 
   // Initializes LEDs
   pinMode(PIN_LED_R, OUTPUT);
@@ -723,8 +729,8 @@ void setup() {
     pinMode(BTN_PINS[i], INPUT_PULLUP);
   }
 
-  // Initializes micro-switches using internal resistance
-  pinMode(PIN_SWITCH_HOUR, INPUT_PULLUP);
+  // Initializes Hall effect sensor and micro-switches using internal resistance to reduce space
+  pinMode(PIN_HALL_SENSOR_HOUR, INPUT_PULLUP);
   pinMode(PIN_SWITCH_MINUTE, INPUT_PULLUP);
   pinMode(PIN_SWITCH_LOCK, INPUT_PULLUP);
 
@@ -741,11 +747,11 @@ void setup() {
     servos[i].instance.write(servos[i].targetAngle);
     servos[i].currentAngle = servos[i].targetAngle;
     servos[i].lastUpdate = millis();
-    delay(500);
+    delay(1000);
     servos[i].instance.detach();
   }
 
-  // Initiliazes RTC chip
+  // Initialiazes RTC chip
   Wire.begin();
   if (!rtc.begin()) {
     setEyesColor(COLOR_RED);  // Signals an error
@@ -753,7 +759,6 @@ void setup() {
       ;  // Halts execution if RTC is missing
   }
   //rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));  // Sets the time of the RTC chip (to uncomment only for first time use of the RTC chip)
-
   // Initializes timers and randomness
   randomSeed(analogRead(A0));
   nextHauntedDelay = random(30000, 60000);
@@ -771,17 +776,22 @@ void loop() {
   // Updates system timestamp and button arrays
   unsigned long currentTime = millis();
   updateButtons(currentTime);
-
-  // User detection handling with data sanitization using Exponential Moving Average (EMA) filter
+  // User detection handling with data sanitization using Exponential Moving Average (EMA) filter and sonar error allowance
+  static uint8_t absenceCount = 0;
   if (currentTime - lastSonarRead >= SONAR_INTERVAL) {
     lastSonarRead = currentTime;
     unsigned int rawDistance = sonar.ping() / US_ROUNDTRIP_CM;
     if (rawDistance > 0) {
+      absenceCount = 0;
       static float filteredDistance = rawDistance;
       filteredDistance = (filteredDistance * 0.7) + (rawDistance * 0.3);
-      isUserDetected = (filteredDistance > 0 && filteredDistance < PROXIMITY_THRESHOLD);
+      isUserDetected = (filteredDistance < PROXIMITY_THRESHOLD);
     } else {
-      isUserDetected = false;
+      absenceCount++;
+      if (absenceCount >= 3) {
+        isUserDetected = false;
+        absenceCount = 0;
+      }
     }
   }
 
@@ -808,7 +818,7 @@ void loop() {
   } else {
     presenceTimer = 0;
     if (absenceTimer == 0) absenceTimer = currentTime;
-    // Resest emotional FSM and restores normal mode if user remains absent
+    // Resets emotional FSM and restores normal mode if user remains absent
     if (currentTime - absenceTimer >= ABSENCE_RESET_MS) {
       if (currentMode == EMOTIONAL_MODE || isEmotionTriggered) {
         currentMode = NORMAL_MODE;
@@ -921,7 +931,9 @@ void loop() {
             }
 
             // Calculates ticking acceleration
-            unsigned long currentInterval = 1500 - (unsigned long)(progress * (1500 - 350));
+            unsigned long currentInterval = MINUTE_HAND_INTERVAL_MS - (unsigned long)(progress * 900.0f);
+            uint8_t currentTickSpeed = HAND_TICK_SPEED + (uint8_t)(progress * (130.0f - HAND_TICK_SPEED));
+            unsigned long currentTickDuration = HAND_TICK_DURATION_MS - (unsigned long)(progress * 250.0f);
 
             // Mimics normal ticking but with increasing speed
             if (minuteTickState == TICK_IDLE) {
@@ -933,29 +945,37 @@ void loop() {
               servos[SRV_HOUR].targetAngle = HAND_STOP;
               servos[SRV_MINUTE].targetAngle = HAND_STOP;
             } else if (minuteTickState == TICK_PULSING) {
-              servos[SRV_MINUTE].targetAngle = HAND_TICK_SPEED;
-              if (currentTime - minuteTickTimer >= HAND_TICK_DURATION_MS) {
+              servos[SRV_MINUTE].targetAngle = currentTickSpeed;
+              if (currentTime - minuteTickTimer >= currentTickDuration) {
                 minuteTickState = TICK_IDLE;
               }
             }
 
-            // Fades eyes to purple
+            // Fades eyes to purple with glitch effect
             uint8_t targetRed = (uint8_t)(progress * 128);
             uint8_t targetBlue = (uint8_t)(progress * 255);
-            setEyesRGB(targetRed, 0, targetBlue);
+            uint8_t glitch = 0;
+            if (random(0, 100) < (progress * 70.0f)) {
+              glitch = random(50, 100);
+            }
+            setEyesRGB((targetRed > glitch) ? targetRed - glitch : 0, 0, (targetBlue > glitch * 2) ? targetBlue - glitch * 2 : 0);
 
             // PHASE 2: JUMPSCARE
           } else if (elapsed < (BUILDUP_DURATION + JUMPSCARE_DURATION)) {
             // Increases speed and pulls the rope to make the tongue stick out
-            setEyesColor(COLOR_PURPLE);
-            servos[SRV_HOUR].targetAngle = HAND_FAST_SPEED;
-            servos[SRV_MINUTE].targetAngle = HAND_FAST_SPEED;
+            setEyesRGB(128 - random(0, 128), 0, 255 - random(0, 255));
+            servos[SRV_HOUR].targetAngle = HAND_STOP;
+            servos[SRV_MINUTE].targetAngle = HAND_STOP;
             servos[SRV_ROPE].targetAngle = ROPE_ANGLE_TAUT;
 
             // PHASE 3: RESET AND TRANSITION
           } else {
+            setEyesRGB(128 - random(0, 128), 0, 255 - random(0, 255));
             servos[SRV_ROPE].targetAngle = ROPE_ANGLE_LOOSE;
-            currentEmotion = EMOTION_HAPPY;
+            if (elapsed > (BUILDUP_DURATION + JUMPSCARE_DURATION + 1200)) {
+              servos[SRV_ROPE].instance.detach();
+              currentEmotion = EMOTION_HAPPY;
+            }
           }
           break;
         }
@@ -964,14 +984,13 @@ void loop() {
         currentPendulumPeriod = PENDULUM_PERIOD_ANGRY;
         setEyesColor(COLOR_RED);
         // Triggers happy emotion when lock is closed
-        if (!isStubbornAngry && digitalRead(PIN_SWITCH_LOCK) == LOW) {
+        if (!isStubbornAngry && digitalRead(PIN_SWITCH_LOCK) == LOW && minuteHandState == HAND_READY && hourHandState == HAND_READY) {
           currentEmotion = EMOTION_HAPPY;
         }
         break;
 
       case EMOTION_HAPPY:
         {
-          setEyesColor(COLOR_GREEN);
           currentPendulumPeriod = PENDULUM_PERIOD_NORMAL;
           static bool blueButtonWasPressed = false;
 
@@ -980,12 +999,9 @@ void loop() {
             if (!blueButtonWasPressed) {
               blueButtonWasPressed = true;
               DateTime nowRTC = rtc.now();
-
-              uint32_t hourAdditionalMs = ((uint32_t)nowRTC.hour() * completeHourLap) / 12;
-              uint32_t minuteAdditionalMs = ((uint32_t)nowRTC.minute() * completeMinuteLap) / 60;
-
-              hourHandOffset = 12 - nowRTC.hour() % 12 + 1;
-              minuteHandOffset = 60 - nowRTC.minute() + 10;
+              uint8_t hour = nowRTC.hour() % 12;
+              hourHandOffset = (hour) > 10 ? hour : (10 - hour);
+              minuteHandOffset = 60 - nowRTC.minute() + 5;
 
               hourHandState = HAND_HOMING;
               minuteHandState = HAND_HOMING;
@@ -1030,7 +1046,7 @@ void loop() {
               lastProbCheckTime = currentTime;
               uint32_t secondsPast = (elapsedHappy - HAPPY_SNAP_DELAY_MS) / 1000;
               uint8_t snapChance = (uint8_t)min((uint32_t)(secondsPast * SNAP_CHANCE_PER_SECOND), (uint32_t)SNAP_CHANCE_MAX);
-              if (random(0, 100) < snapChance) {
+              if (random(0, 100) < snapChance && hourHandState == HAND_READY && minuteHandState == HAND_READY) {
                 currentEmotion = EMOTION_ANGRY;
                 isStubbornAngry = true;
               }
@@ -1058,20 +1074,38 @@ void loop() {
   }
 
   // Handles realistic pendulum movement using a sine wave
-  bool hungryScaryPhase = (currentMode == EMOTIONAL_MODE && currentEmotion == EMOTION_HUNGRY && (currentTime - hungryStartTime >= BUILDUP_DURATION));
-
   if (currentTime - servos[SRV_PENDULUM].lastUpdate >= servos[SRV_PENDULUM].stepDelay) {  // Update at 50Hz
     servos[SRV_PENDULUM].lastUpdate = currentTime;
     float pendulumPhase = fmod((float)currentTime / currentPendulumPeriod, 1.0f);
     float rawSin = sin(2.0 * PI * pendulumPhase);
-    int pendulumAngle = hungryScaryPhase ? PENDULUM_CENTER : PENDULUM_CENTER + (int)(PENDULUM_SWING_AMPLITUDE * rawSin);
+    int pendulumAngle = PENDULUM_CENTER + (int)(PENDULUM_SWING_AMPLITUDE * rawSin);
     servos[SRV_PENDULUM].instance.write((uint8_t)constrain(pendulumAngle, PENDULUM_CENTER - PENDULUM_SWING_AMPLITUDE, PENDULUM_CENTER + PENDULUM_SWING_AMPLITUDE));
   }
 
+  // Handles snapping rope movement
+  static bool start = true;
+  if (servos[SRV_ROPE].currentAngle != servos[SRV_ROPE].targetAngle) {
+    if (start && (!servos[SRV_ROPE].instance.attached() || servos[SRV_ROPE].targetAngle == ROPE_ANGLE_LOOSE)) {
+      servos[SRV_ROPE].instance.attach(servos[SRV_ROPE].pin);
+      servos[SRV_ROPE].instance.write(servos[SRV_ROPE].targetAngle);
+      servos[SRV_ROPE].lastUpdate = currentTime;
+      start = false;
+    }
+    if (currentTime - servos[SRV_ROPE].lastUpdate >= servos[SRV_ROPE].stepDelay) {
+      servos[SRV_ROPE].currentAngle = servos[SRV_ROPE].targetAngle;
+      start = true;
+    }
+  } else {
+    // Keeps the rope servo attached if taut to preserve needed torque
+    if (servos[SRV_ROPE].instance.attached() && servos[SRV_ROPE].targetAngle != ROPE_ANGLE_TAUT) {
+      servos[SRV_ROPE].instance.detach();
+    }
+  }
+
   // CONCURRENT SERVOS UPDATE
-  // Writes small step increments towards target angle and detaches non-moving servo to optimize power usage
+  // Writes small step increments towards target angle and detaches non-moving servos to optimize power usage
   for (uint8_t i = 0; i < TOTAL_SERVOS; i++) {
-    if (i == SRV_PENDULUM) continue;  // Skips standalone servo
+    if (i == SRV_PENDULUM || i == SRV_ROPE) continue;  // Skips standalone servos
 
     if (servos[i].isContinuous) {
       if (servos[i].targetAngle == HAND_STOP) {
@@ -1100,7 +1134,7 @@ void loop() {
           servos[i].instance.write(servos[i].currentAngle);
         }
       } else {
-        if (servos[i].instance.attached() && !(i == SRV_ROPE && servos[i].targetAngle == ROPE_ANGLE_TAUT)) {  // Keeps the rope servo attached if taut to preserve needed torque
+        if (servos[i].instance.attached()) {
           servos[i].instance.detach();
         }
       }
