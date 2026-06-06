@@ -70,7 +70,7 @@ While the following table indicates the pins used in the source code, the pin nu
 ## Software
 
 The firmware implements a layered finite state machine. By employing an asynchronous scheduler that relies only on software timers (updated by the `millis()` function) instead of blocking `delay()` calls, the architecture is further divided into specialized state machines and concurrent handlers of independent units.
-You can read an in-depth overview of the architecture and code design in the [Documentation](TempusMordet.ino).
+You can read an in-depth overview of the architecture and code design in the [Documentation](<Emotional Objects - Documentation.pdf>).
 
 ## Installation & Setup Guide
 
